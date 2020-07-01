@@ -66,166 +66,186 @@ _log = logging.getLogger(__name__)
 
 
 class NodalVoltage(object):
-    """ A simple class that handles publishing forward and reverse differences
+	""" A simple class that handles publishing forward and reverse differences
 
-    Important in handling the gridappsd platform
+	Important in handling the gridappsd platform
 
-    The object should be used as a callback from a GridAPPSD object so that the
-    on_message function will get called each time a message from the simulator.  During
-    the execution of on_message the `CapacitorToggler` object will publish a
-    message to the simulation_input_topic with the forward and reverse difference specified.
-    """
+	The object should be used as a callback from a GridAPPSD object so that the
+	on_message function will get called each time a message from the simulator.  During
+	the execution of on_message the `CapacitorToggler` object will publish a
+	message to the simulation_input_topic with the forward and reverse difference specified.
+	"""
 
-    def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw):
-        """ Create a ``CapacitorToggler`` object
+	def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw):
+		""" Create a ``CapacitorToggler`` object
 
-        This object should be used as a subscription callback from a ``GridAPPSD``
-        object.  This class will toggle the capacitors passed to the constructor
-        off and on every five messages that are received on the ``fncs_output_topic``.
+		This object should be used as a subscription callback from a ``GridAPPSD``
+		object.  This class will toggle the capacitors passed to the constructor
+		off and on every five messages that are received on the ``fncs_output_topic``.
 
-        The five message mentioned above refers to DEFAULT_MESSAGE_PERIOD
+		The five message mentioned above refers to DEFAULT_MESSAGE_PERIOD
 
-        Note
-        ----
-        This class does not subscribe only publishes.
+		Note
+		----
+		This class does not subscribe only publishes.
 
-        Parameters
-        ----------
-        simulation_id: str
-            The simulation_id to use for publishing to a topic.
-        gridappsd_obj: GridAPPSD
-            An instatiated object that is connected to the gridappsd message bus
-            usually this should be the same object which subscribes, but that
-            isn't required.
-        capacitor_list: list(str)
-            A list of capacitors mrids to turn on/off
-        """
-        self._gapps = gridappsd_obj
+		Parameters
+		----------
+		simulation_id: str
+		    The simulation_id to use for publishing to a topic.
+		gridappsd_obj: GridAPPSD
+		    An instatiated object that is connected to the gridappsd message bus
+		    usually this should be the same object which subscribes, but that
+		    isn't required.
+		capacitor_list: list(str)
+		    A list of capacitors mrids to turn on/off
+		"""
+		self._gapps = gridappsd_obj
 
-        # the five variables below are different than the ones presented on original file
-        # have been created by Shiva to see AC lines and switch
-        self._simulation_id = simulation_id
-        self._ACline = ACline
-        self._obj_msr_loadsw = obj_msr_loadsw
-        self._flag = 0
-        self._start_time = 0
+		# the five variables below are different than the ones presented on original file
+		# have been created by Shiva to see AC lines and switch
+		self._simulation_id = simulation_id
+		self._ACline = ACline
+		self._obj_msr_loadsw = obj_msr_loadsw
+		self._flag = 0
+		self._start_time = 0
+		self.check = True
+		self.inp = False
 
-        self._message_count = 0
-        self._last_toggle_on = False
-        self._open_diff = DifferenceBuilder(simulation_id)
-        self._close_diff = DifferenceBuilder(simulation_id)
-        self._publish_to_topic = simulation_input_topic(simulation_id)
-        _log.info("Building capacitor list")
+		self._message_count = 0
+		self._last_toggle_on = False
+		self._open_diff = DifferenceBuilder(simulation_id)
+		self._close_diff = DifferenceBuilder(simulation_id)
+		self._publish_to_topic = simulation_input_topic(simulation_id)
+		_log.info("Building capacitor list")
         
 
-    def on_message(self, headers, message):
-        # this section is modified by shiva
-        """ Handle incoming messages on the simulation_output_topic for the simulation_id
+	def on_message(self, headers, message):
+		# this section is modified by shiva
+		""" Handle incoming messages on the simulation_output_topic for the simulation_id
 
-        Parameters
-        ----------
-        headers: dict
-            A dictionary of headers that could be used to determine topic of origin and
-            other attributes.
-        message: object
-            A data structure following the protocol defined in the message structure
-            of ``GridAPPSD``.  Most message payloads will be serialized dictionaries, but that is
-            not a requirement.
-        """
+		Parameters
+		----------
+		headers: dict
+		    A dictionary of headers that could be used to determine topic of origin and
+		    other attributes.
+		message: object
+		    A data structure following the protocol defined in the message structure
+		    of ``GridAPPSD``.  Most message payloads will be serialized dictionaries, but that is
+		    not a requirement.
+		"""
 
-        if type(message) == str:
-            message = json.loads(message)
+		if type(message) == str:
+			message = json.loads(message)
 
-        # Some demo for understanding object and measurement mrids.
-        # Print the status of several switches
-        timestamp = message["message"] ["timestamp"]
-        meas_value = message['message']['measurements']
-        
-        # SWITCHES
-        # Find interested mrids. We are only interested in Pos of the switches
-        ds = [d for d in self._obj_msr_loadsw if d['type'] == 'Pos']
-        print ("\n ******* ds ********* \n ")
-        print(ds)          
+		# Some demo for understanding object and measurement mrids.
+		# Print the status of several switches
+		timestamp = message["message"] ["timestamp"]
+		meas_value = message['message']['measurements']
 
-        # Store the open switches
-        Loadbreak = []
-        for d1 in ds:                
-            if d1['measid'] in meas_value:
-                v = d1['measid']
-                p = meas_value[v]
-                if p['value'] == 0:
-                    Loadbreak.append(d1['eqname'])
+		# SWITCHES
+		# Find interested mrids. We are only interested in Pos of the switches
+		ds = [d for d in self._obj_msr_loadsw if d['type'] == 'Pos']
+		# print ("\n ******* ds ********* \n ")
+		# print(ds)          
 
-        print('.....................................................')
-        print('The total number of open switches:', len(set(Loadbreak)))
-        print(timestamp, set(Loadbreak))
-        # print(sh)
-        
-        # PNV
-        # Find interested mrids. We are only interested in PNV
-        phase_check = [d for d in self._ACline if d['phases'] == 'A']
-        print ("\n ******* phase check ********* \n ")
-        print (phase_check)
-        # print(sh)   
-        
-        # Store the open switches
-        phaseA_PNV = []
-        for d1 in phase_check:                
-            if d1['measid'] in meas_value:
-                v = d1['measid']
-                p = meas_value[v]
-                # print ('\n p \n', p) 
-                # print(sh)
-                if p['magnitude'] > 2000 and p['magnitude'] < 4000 :
-                    phaseA_PNV.append(d1['bus'])
+		# Store the open switches
+		Loadbreak = []
+		for d1 in ds:                
+			if d1['measid'] in meas_value:
+				v = d1['measid']
+				p = meas_value[v]
+				if p['value'] == 0:
+					Loadbreak.append(d1['eqname'])
+		            
+		#print('.....................................................')
+		#print('The total number of open switches:', len(set(Loadbreak)))
+		#print(timestamp, set(Loadbreak))
+		
+		phase_checking = ['A', 'B', 'C']
+		while (self.check):
+			print ("For now we can only allow you to view Phase-to-Neutral Voltage related information")
+			while not (self.inp):
+				phase_val = input("Which phase are you interested in (A/B/C)? ")
+				self.inp = True if phase_val in phase_checking else print('Unidentified phase')
+			print ("Selecting Phase as -- {} -- ...".format(phase_val))
+			time.sleep(3)       	
+			print (type(phase_val))
 
-        print('.....................................................')
-        print('The total number of nodes with PNV > 2000 and PNV < 4000 = ', len(set(phaseA_PNV)))
-        print("timestamp: {} and the set of buses are: {}".format(timestamp, set(phaseA_PNV)))
-        print(sh) 
-        
-        
+			# PNV
+			# Find interested mrids. We are only interested in PNV of specific phase
+			phase_check = [d for d in self._ACline if d['phases'] == phase_val]
+			# print ("\n ******* phase check ********* \n ")
+			# print (phase_check)
+			# print(sh)   
 
-        # Open one of the switches
-        if self._flag == 0:
-            swmrid = '_BC63E102-37AD-4269-BB19-8351403B9B60'
-            self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
-            msg = self._open_diff.get_message()
-            print(msg)
-            # send the message to platform
-            self._gapps.send(self._publish_to_topic, json.dumps(msg))
+			# get the ranges
+			min_volt = float (input("Minimum value of voltage at phase {}? ".format(phase_val)))
+			max_volt = float (input("Maximum value of voltage at phase {}? ".format(phase_val)))
 
-            swmrid = '_7262F9C3-2E8B-4069-AA13-BF4A655ACE35'
-            self._open_diff.add_difference(swmrid, "Switch.open", 0, 1)
-            msg = self._open_diff.get_message()
-            print(msg)
-            self._gapps.send(self._publish_to_topic, json.dumps(msg))  
-            self._flag = 1
+			phase_PNV = []
+			for d1 in phase_check:                
+				if d1['measid'] in meas_value:
+					v = d1['measid']
+					p = meas_value[v]
+					# print ('\n p \n', p) 
+					# print(sh)
+					if p['magnitude'] > min_volt and p['magnitude'] < max_volt :
+				    		phase_PNV.append(d1['bus'])
+
+			print('.....................................................')
+			print('The total number of nodes with PNV > {} and PNV < {} = {} '.format(min_volt, max_volt, len(set(phase_PNV))))
+			print("timestamp: {} and the set of buses are: {}".format(timestamp, set(phase_PNV)))
+			recheck = input("Do you want another option (Y/N)? ")
+			if recheck == 'N':
+				self.check = 0
+				
+			self.inp = False 	
+			
+		print(sh) 
+			
+		
+
+		# Open one of the switches
+		if self._flag == 0:
+		    swmrid = '_BC63E102-37AD-4269-BB19-8351403B9B60'
+		    self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
+		    msg = self._open_diff.get_message()
+		    print(msg)
+		    # send the message to platform
+		    self._gapps.send(self._publish_to_topic, json.dumps(msg))
+
+		    swmrid = '_7262F9C3-2E8B-4069-AA13-BF4A655ACE35'
+		    self._open_diff.add_difference(swmrid, "Switch.open", 0, 1)
+		    msg = self._open_diff.get_message()
+		    print(msg)
+		    self._gapps.send(self._publish_to_topic, json.dumps(msg))  
+		    self._flag = 1
 
 
-        # Time series data
-        # if self._flag == 0:
-        #     timestamp = message["message"] ["timestamp"]
-        #     self._flag = 1
-        #     self._start_time = timestamp
-        # meas_value = message['message']['measurements']
-        # timestamp = message["message"] ["timestamp"]
-        # meas_mrid = []
-        # for i in self._ACline:
-        #     meas_mrid.append(i['measid'])
+		# Time series data
+		# if self._flag == 0:
+		#     timestamp = message["message"] ["timestamp"]
+		#     self._flag = 1
+		#     self._start_time = timestamp
+		# meas_value = message['message']['measurements']
+		# timestamp = message["message"] ["timestamp"]
+		# meas_mrid = []
+		# for i in self._ACline:
+		#     meas_mrid.append(i['measid'])
 
-        # if timestamp > self._start_time + 12:
-        #     queue = 'goss.gridappsd.process.request.data.timeseries'
-        #     id = str(self._simulation_id)
-        #     print(type(id), id)
-        #     request = {"queryMeasurement": "simulation",
-        #             "queryFilter": {"simulation_id": "1092088853","measurement_mrid": "_fc3f85af-1d7f-4f21-8eff-af9fade507b0"},
-        #             "responseFormat": "JSON"}
-        #     data = self._gapps.get_response(queue, request, timeout = 120)
-        #     print(data)
-        #     print(sh)
-         
-        # python runsample.py 858290661 '{"power_system_config":  {"Line_name":"_C1C3E687-6FFD-C753-582B-632A27E28507"}}'
+		# if timestamp > self._start_time + 12:
+		#     queue = 'goss.gridappsd.process.request.data.timeseries'
+		#     id = str(self._simulation_id)
+		#     print(type(id), id)
+		#     request = {"queryMeasurement": "simulation",
+		#             "queryFilter": {"simulation_id": "1092088853","measurement_mrid": "_fc3f85af-1d7f-4f21-8eff-af9fade507b0"},
+		#             "responseFormat": "JSON"}
+		#     data = self._gapps.get_response(queue, request, timeout = 120)
+		#     print(data)
+		#     print(sh)
+		 
+		# python runsample.py 858290661 '{"power_system_config":  {"Line_name":"_C1C3E687-6FFD-C753-582B-632A27E28507"}}'
 
 def get_meas_mrid(gapps, model_mrid, topic):
 
