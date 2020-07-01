@@ -39,8 +39,12 @@
 # -------------------------------------------------------------------------------
 """
 Created on Jan 19, 2018
-
+Forked from: PNNL
 @author: Craig Allwardt
+
+Modified by: WSU
+@author: Abodh Poudyal
+Last updated on: July 01, 2020
 """
 
 __version__ = "0.0.8"
