@@ -76,7 +76,7 @@ class NodalVoltage(object):
 	message to the simulation_input_topic with the forward and reverse difference specified.
 	"""
 
-	def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw):
+	def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw, switches):
 		""" Create a ``CapacitorToggler`` object
 
 		This object should be used as a subscription callback from a ``GridAPPSD``
@@ -111,6 +111,7 @@ class NodalVoltage(object):
 		self._start_time = 0
 		self.check = True
 		self.inp = False
+		self._switches = switches
 
 		self._message_count = 0
 		self._last_toggle_on = False
@@ -142,36 +143,37 @@ class NodalVoltage(object):
 		# Print the status of several switches
 		timestamp = message["message"] ["timestamp"]
 		meas_value = message['message']['measurements']
-
+		
 		# SWITCHES
 		# Find interested mrids. We are only interested in Pos of the switches
-		ds = [d for d in self._obj_msr_loadsw if d['type'] == 'Pos']
-		# print ("\n ******* ds ********* \n ")
-		# print(ds)          
+		switch_position = [d for d in self._obj_msr_loadsw if d['type'] == 'Pos']
+		print ("\n ******* switch_position ********* \n ")
+		print(switch_position)          
 
 		# Store the open switches
 		Loadbreak = []
-		for d1 in ds:                
-			if d1['measid'] in meas_value:
-				v = d1['measid']
+		for iter_sw_pos in switch_position:                
+			if iter_sw_pos['measid'] in meas_value:
+				v = iter_sw_pos['measid']
 				p = meas_value[v]
 				if p['value'] == 0:
-					Loadbreak.append(d1['eqname'])
+					Loadbreak.append(iter_sw_pos['eqname'])
 		            
-		#print('.....................................................')
-		#print('The total number of open switches:', len(set(Loadbreak)))
-		#print(timestamp, set(Loadbreak))
+		print('.....................................................')
+		print('The total number of open switches:', len(set(Loadbreak)))
+		print(timestamp, set(Loadbreak))
 		
+
+		print ("For now we can only allow you to view Phase-to-Neutral Voltage related information")
 		phase_checking = ['A', 'B', 'C']
 		while (self.check):
-			print ("For now we can only allow you to view Phase-to-Neutral Voltage related information")
+			
 			while not (self.inp):
 				phase_val = input("Which phase are you interested in (A/B/C)? ")
 				self.inp = True if phase_val in phase_checking else print('Unidentified phase')
-			print ("Selecting Phase as -- {} -- ...".format(phase_val))
+			print ("Selecting Phase as ** {} ** -- ...".format(phase_val))
 			time.sleep(3)       	
-			print (type(phase_val))
-
+			
 			# PNV
 			# Find interested mrids. We are only interested in PNV of specific phase
 			phase_check = [d for d in self._ACline if d['phases'] == phase_val]
@@ -198,30 +200,48 @@ class NodalVoltage(object):
 			print("timestamp: {} and the set of buses are: {}".format(timestamp, set(phase_PNV)))
 			recheck = input("Do you want another option (Y/N)? ")
 			if recheck == 'N':
-				self.check = 0
-				
+				self.check = False
+								
 			self.inp = False 	
-			
-		print(sh) 
-			
+				
+		# print(sh) 
+		self.check = True
+		print ('---------------------------------------')
+		print ("Now let's try working on the switches")
+		print ('---------------------------------------')
 		
+		switch_val = input("Are you interesting in toggling the switches (Y/N)? ")
+		# print("\n ************** check ********************* \n")
+		# print(self._switches[0]['mrid'])
+		#print(sh)
+		
+		if (switch_val == 'Y'):
+			sel_sw = int (input("select the switch to toggle (0-7)"))
+			
+			# Open one of the switches
+			if self._flag == 0:
+			    # swmrid = '_BC63E102-37AD-4269-BB19-8351403B9B60'
+			    # self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
+			    # msg = self._open_diff.get_message()
+			    # print(msg)
+			    # send the message to platform
+			    # self._gapps.send(self._publish_to_topic, json.dumps(msg))
 
-		# Open one of the switches
-		if self._flag == 0:
-		    swmrid = '_BC63E102-37AD-4269-BB19-8351403B9B60'
-		    self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
-		    msg = self._open_diff.get_message()
-		    print(msg)
-		    # send the message to platform
-		    self._gapps.send(self._publish_to_topic, json.dumps(msg))
-
-		    swmrid = '_7262F9C3-2E8B-4069-AA13-BF4A655ACE35'
-		    self._open_diff.add_difference(swmrid, "Switch.open", 0, 1)
-		    msg = self._open_diff.get_message()
-		    print(msg)
-		    self._gapps.send(self._publish_to_topic, json.dumps(msg))  
-		    self._flag = 1
-
+			    #swmrid = '_7262F9C3-2E8B-4069-AA13-BF4A655ACE35'
+			    #self._open_diff.add_difference(swmrid, "Switch.open", 0, 1)
+			    #msg = self._open_diff.get_message()
+			    #print(msg)
+			    #self._gapps.send(self._publish_to_topic, json.dumps(msg))  
+			    #self._flag = 1
+			    
+			    swmrid = self._switches[sel_sw]['mrid']
+			    self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
+			    msg = self._open_diff.get_message()
+			    print(msg)
+			    # send the message to platform
+			    self._gapps.send(self._publish_to_topic, json.dumps(msg))
+		# print(sh)
+		
 
 		# Time series data
 		# if self._flag == 0:
@@ -249,40 +269,94 @@ class NodalVoltage(object):
 
 def get_meas_mrid(gapps, model_mrid, topic):
 
-    # for AC line segment
-    # this basically means that on a selected topic, what message(request) do you have?
-    message = {
-        "modelId": model_mrid,
-        "requestType": "QUERY_OBJECT_MEASUREMENTS",
-        "resultFormat": "JSON",
-        "objectType": "ACLineSegment"}
-    obj_msr_ACline = gapps.get_response(topic, message, timeout=180)
-    obj_msr_ACline = obj_msr_ACline['data']
+	# for AC line segment
+	# this basically means that on a selected topic, what message(request) do you have?
+	message = {
+		"modelId": model_mrid,
+		"requestType": "QUERY_OBJECT_MEASUREMENTS",
+		"resultFormat": "JSON",
+		"objectType": "ACLineSegment"}
+	obj_msr_ACline = gapps.get_response(topic, message, timeout=180)
+	obj_msr_ACline = obj_msr_ACline['data']
 
-    # get the measurement MRID if the type is PNV = Phase to neutral voltage
-    obj_msr_ACline = [measid for measid in obj_msr_ACline if measid['type'] == 'PNV']
+	# get the measurement MRID if the type is PNV = Phase to neutral voltage
+	obj_msr_ACline = [measid for measid in obj_msr_ACline if measid['type'] == 'PNV']
 
-    # this is for load break switch
-    # Note: the objectType is pre-defined (case-sensitive as well))
-    message = {
-        "modelId": model_mrid,
-        "requestType": "QUERY_OBJECT_MEASUREMENTS",
-        "resultFormat": "JSON",
-        "objectType": "LoadBreakSwitch"}     
-    obj_msr_loadsw = gapps.get_response(topic, message, timeout=180)
+	# this is for load break switch
+	# Note: the objectType is pre-defined (case-sensitive as well))
+	message = {
+		"modelId": model_mrid,
+		"requestType": "QUERY_OBJECT_MEASUREMENTS",
+		"resultFormat": "JSON",
+		"objectType": "LoadBreakSwitch"}     
+	obj_msr_loadsw = gapps.get_response(topic, message, timeout=180)
 
-    # get all of the data here
-    obj_msr_loadsw = obj_msr_loadsw['data']
+	# get all of the data here
+	obj_msr_loadsw = obj_msr_loadsw['data']
 
-    # want to check what's in there? why not print ???
-    # print(obj_msr_ACline)
-    # print(sh)
+	query = """
+	PREFIX r:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+	PREFIX c:  <http://iec.ch/TC57/CIM100#>
+	SELECT ?cimtype ?name ?bus1 ?bus2 ?id WHERE {
+	SELECT ?cimtype ?name ?bus1 ?bus2 ?phs ?id WHERE {
+	VALUES ?fdrid {"%s"}  # 9500 node
+	VALUES ?cimraw {c:LoadBreakSwitch c:Recloser c:Breaker}
+	?fdr c:IdentifiedObject.mRID ?fdrid.
+	?s r:type ?cimraw.
+	bind(strafter(str(?cimraw),"#") as ?cimtype)
+	?s c:Equipment.EquipmentContainer ?fdr.
+	?s c:IdentifiedObject.name ?name.
+	?s c:IdentifiedObject.mRID ?id.
+	?t1 c:Terminal.ConductingEquipment ?s.
+	?t1 c:ACDCTerminal.sequenceNumber "1".
+	?t1 c:Terminal.ConnectivityNode ?cn1. 
+	?cn1 c:IdentifiedObject.name ?bus1.
+	?t2 c:Terminal.ConductingEquipment ?s.
+	?t2 c:ACDCTerminal.sequenceNumber "2".
+	?t2 c:Terminal.ConnectivityNode ?cn2. 
+	?cn2 c:IdentifiedObject.name ?bus2
+		OPTIONAL {?swp c:SwitchPhase.Switch ?s.
+		?swp c:SwitchPhase.phaseSide1 ?phsraw.
+		bind(strafter(str(?phsraw),"SinglePhaseKind.") as ?phs) }
+	} ORDER BY ?name ?phs
+	}
+	GROUP BY ?cimtype ?name ?bus1 ?bus2 ?id
+	ORDER BY ?cimtype ?name
+		""" % model_mrid
+	results = gapps.query_data(query, timeout=60)
+	
+	# print('################# RESULTS ####################')
+	# print(results)
+	
+	# print('\n ********************************** \n')
+	results_obj = results['data']
+	sw_data = results_obj['results']['bindings']
+	# print('################# SW ####################')
+	# print(sw_data)
+	# print('\n ********************************** \n')
+	
+	switches = []
+	for p in sw_data:
+		# print(p)
+		sw_mrid = p['id']['value']
+		fr_to = [p['bus1']['value'].upper(), p['bus2']['value'].upper()]
+		message = dict(name = p['name']['value'],
+				mrid = sw_mrid,
+				sw_con = fr_to)
+		switches.append(message)
+	
+	# print("\n **************** Swtiches data ********************** \n")
+	# print(switches)
 
-    # here we do not check the measurement type as we are only interested in meas MRID but not any specific type
-    # it will have different MRIDs such as voltage, current, power etc
-    
-    # here ACLine already has a filter to show such MRID whose type is PNV 
-    return obj_msr_ACline, obj_msr_loadsw
+	# want to check what's in there? why not print ???
+	# print(obj_msr_ACline)
+	# print(sh)
+
+	# here we do not check the measurement type as we are only interested in meas MRID but not any specific type
+	# it will have different MRIDs such as voltage, current, power etc
+
+	# here ACLine already has a filter to show such MRID whose type is PNV 
+	return obj_msr_ACline, obj_msr_loadsw, switches
 
 
 def _main():
@@ -323,7 +397,7 @@ def _main():
     topic = "goss.gridappsd.process.request.data.powergridmodel"
 
     # returns the MRID for AC lines and switch
-    ACline, obj_msr_loadsw = get_meas_mrid(gapps, model_mrid, topic)
+    ACline, obj_msr_loadsw, switches = get_meas_mrid(gapps, model_mrid, topic)
     
     # print("\n ************ ACLine ********* \n")
     # print(ACline)
@@ -333,7 +407,7 @@ def _main():
     # print(sh)
     
     # toggling the switch ON and OFF
-    toggler = NodalVoltage(opts.simulation_id, gapps, ACline, obj_msr_loadsw)
+    toggler = NodalVoltage(opts.simulation_id, gapps, ACline, obj_msr_loadsw, switches)
 
     # gapps.subscribe calls the on_message function
     gapps.subscribe(listening_to_topic, toggler)
