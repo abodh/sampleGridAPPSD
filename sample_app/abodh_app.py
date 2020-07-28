@@ -54,6 +54,7 @@ import json
 import logging
 import sys
 import time
+import pdb
 
 from gridappsd import GridAPPSD, DifferenceBuilder, utils, GOSS, topics
 from gridappsd.topics import simulation_input_topic, simulation_output_topic, simulation_log_topic, simulation_output_topic
@@ -80,7 +81,7 @@ class NodalVoltage(object):
 	message to the simulation_input_topic with the forward and reverse difference specified.
 	"""
 
-	def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw, switches):
+	def __init__(self, simulation_id, gridappsd_obj, ACline, obj_msr_loadsw, obj_msr_reg, switches, regulators):
 		""" Create a ``CapacitorToggler`` object
 
 		This object should be used as a subscription callback from a ``GridAPPSD``
@@ -111,16 +112,20 @@ class NodalVoltage(object):
 		self._simulation_id = simulation_id
 		self._ACline = ACline
 		self._obj_msr_loadsw = obj_msr_loadsw
+		self._obj_msr_reg = obj_msr_reg
 		self._flag = 0
 		self._start_time = 0
 		self.check = True
 		self.inp = False
 		self._switches = switches
+		self._regulators = regulators
 
 		self._message_count = 0
 		self._last_toggle_on = False
 		self._open_diff = DifferenceBuilder(simulation_id)
 		self._close_diff = DifferenceBuilder(simulation_id)
+		self._tap_close_diff = DifferenceBuilder(simulation_id)
+		
 		self._publish_to_topic = simulation_input_topic(simulation_id)
 		_log.info("Building capacitor list")
         
@@ -148,11 +153,64 @@ class NodalVoltage(object):
 		timestamp = message["message"] ["timestamp"]
 		meas_value = message['message']['measurements']
 		
-		# SWITCHES
+		
+		
+		print(self._obj_msr_reg)
+		print(sh)
+		
+		# *************************** Regulator ********************************
+		
+		# get the operating position of regulator
+		reg_position = [d for d in self._obj_msr_reg if d['type'] == 'Pos']
+		#print ("\n ******* reg_position ********* \n ")
+		#print(reg_position) 
+		#print(sh)         
+
+		# Store the regulator positions
+		regulators_tap= []
+		for iter_reg_pos in reg_position:                
+			if iter_reg_pos['measid'] in meas_value:
+				v = iter_reg_pos['measid']
+				p = meas_value[v]
+				regulators_tap.append(p)
+		            
+		print('\n.................   regulator tap   ...............\n')
+		#print('The total regulators', len(set(regulators_tap)))
+		#print(timestamp, set(regulators_tap))
+		#print(regulators_tap)		
+		# print (sh)
+		
+		# changing the tap position of the regulator
+		reg_mrid = [x for x in regulators_tap if x['value'] == 0]
+		print (reg_mrid)
+		#print(sh)
+		
+		print ("################ self regulators #####################")
+		print(self._regulators)
+		
+		
+		
+		measid = [d for d in self._regulators if d['name']=='creg2a']
+		print ("############# measid ###############")
+		print (measid[0]['mrid'])
+		print ('############# measidtype ###############')
+		print (type(measid[0]))
+		
+		self._tap_close_diff.add_difference(measid[0]['mrid'], "TapChanger.step", 5, 0) 
+		# send the message to platform
+		msg = self._tap_close_diff.get_message()
+		print(msg)
+		self._gapps.send(self._publish_to_topic, json.dumps(msg))
+		#print(sh)
+		
+		
+		
+		
+		# *************************** SWITCHES ********************************
 		# Find interested mrids. We are only interested in Pos of the switches
 		switch_position = [d for d in self._obj_msr_loadsw if d['type'] == 'Pos']
-		print ("\n ******* switch_position ********* \n ")
-		print(switch_position)          
+		#print ("\n ******* switch_position ********* \n ")
+		#print(switch_position)          
 
 		# Store the open switches
 		Loadbreak = []
@@ -167,7 +225,9 @@ class NodalVoltage(object):
 		print('The total number of open switches:', len(set(Loadbreak)))
 		print(timestamp, set(Loadbreak))
 		
-
+		
+		
+		
 		print ("For now we can only allow you to view Phase-to-Neutral Voltage related information")
 		phase_checking = ['A', 'B', 'C']
 		while (self.check):
@@ -239,14 +299,17 @@ class NodalVoltage(object):
 			    #self._flag = 1
 			    
 			    swmrid = self._switches[sel_sw]['mrid']
-			    self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) # (1,0) -> (current_state, next_state)
+			    self._open_diff.add_difference(swmrid, "Switch.open", 1, 0) 
+			    # (1,0) -> (current_state, next_state)
 			    msg = self._open_diff.get_message()
 			    print(msg)
 			    # send the message to platform
 			    self._gapps.send(self._publish_to_topic, json.dumps(msg))
 		# print(sh)
 		
-
+		
+		
+	
 		# Time series data
 		# if self._flag == 0:
 		#     timestamp = message["message"] ["timestamp"]
@@ -327,21 +390,110 @@ def get_meas_mrid(gapps, model_mrid, topic):
 	GROUP BY ?cimtype ?name ?bus1 ?bus2 ?id
 	ORDER BY ?cimtype ?name
 		""" % model_mrid
-	results = gapps.query_data(query, timeout=60)
+	sw_results = gapps.query_data(query, timeout=60)
 	
+	
+	# voltage regulators - DistRegulator
+	query = """
+	PREFIX r:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+	PREFIX c:  <http://iec.ch/TC57/CIM100#>
+	SELECT ?rname ?pname ?tname ?wnum ?phs ?incr ?mode ?enabled ?highStep ?lowStep ?neutralStep ?normalStep ?neutralU 
+	 ?step ?initDelay ?subDelay ?ltc ?vlim 
+		?vset ?vbw ?ldc ?fwdR ?fwdX ?revR ?revX ?discrete ?ctl_enabled ?ctlmode ?monphs ?ctRating ?ctRatio ?ptRatio ?fdrid
+	WHERE {
+	VALUES ?fdrid {"%s"}  # 123 PV
+	 ?pxf c:Equipment.EquipmentContainer ?fdr.
+	 ?fdr c:IdentifiedObject.mRID ?fdrid.
+	 ?rtc r:type c:RatioTapChanger.
+	 ?rtc c:IdentifiedObject.name ?rname.
+	 ?rtc c:RatioTapChanger.TransformerEnd ?end.
+	 ?end c:TransformerEnd.endNumber ?wnum.
+	{?end c:PowerTransformerEnd.PowerTransformer ?pxf.}
+	  UNION
+	{?end c:TransformerTankEnd.TransformerTank ?tank.
+	 ?tank c:IdentifiedObject.name ?tname.
+	 OPTIONAL {?end c:TransformerTankEnd.phases ?phsraw.
+	  bind(strafter(str(?phsraw),"PhaseCode.") as ?phs)}
+	 ?tank c:TransformerTank.PowerTransformer ?pxf.}
+	 ?pxf c:IdentifiedObject.name ?pname.
+	 ?rtc c:RatioTapChanger.stepVoltageIncrement ?incr.
+	 ?rtc c:RatioTapChanger.tculControlMode ?moderaw.
+	  bind(strafter(str(?moderaw),"TransformerControlMode.") as ?mode)
+	 ?rtc c:TapChanger.controlEnabled ?enabled.
+	 ?rtc c:TapChanger.highStep ?highStep.
+	 ?rtc c:TapChanger.initialDelay ?initDelay.
+	 ?rtc c:TapChanger.lowStep ?lowStep.
+	 ?rtc c:TapChanger.ltcFlag ?ltc.
+	 ?rtc c:TapChanger.neutralStep ?neutralStep.
+	 ?rtc c:TapChanger.neutralU ?neutralU.
+	 ?rtc c:TapChanger.normalStep ?normalStep.
+	 ?rtc c:TapChanger.step ?step.
+	 ?rtc c:TapChanger.subsequentDelay ?subDelay.
+	 ?rtc c:TapChanger.TapChangerControl ?ctl.
+	 ?ctl c:TapChangerControl.limitVoltage ?vlim.
+	 ?ctl c:TapChangerControl.lineDropCompensation ?ldc.
+	 ?ctl c:TapChangerControl.lineDropR ?fwdR.
+	 ?ctl c:TapChangerControl.lineDropX ?fwdX.
+	 ?ctl c:TapChangerControl.reverseLineDropR ?revR.
+	 ?ctl c:TapChangerControl.reverseLineDropX ?revX.
+	 ?ctl c:RegulatingControl.discrete ?discrete.
+	 ?ctl c:RegulatingControl.enabled ?ctl_enabled.
+	 ?ctl c:RegulatingControl.mode ?ctlmoderaw.
+	  bind(strafter(str(?ctlmoderaw),"RegulatingControlModeKind.") as ?ctlmode)
+	 ?ctl c:RegulatingControl.monitoredPhase ?monraw.
+	  bind(strafter(str(?monraw),"PhaseCode.") as ?monphs)
+	 ?ctl c:RegulatingControl.targetDeadband ?vbw.
+	 ?ctl c:RegulatingControl.targetValue ?vset.
+	 ?asset c:Asset.PowerSystemResources ?rtc.
+	 ?asset c:Asset.AssetInfo ?inf.
+	 ?inf c:TapChangerInfo.ctRating ?ctRating.
+	 ?inf c:TapChangerInfo.ctRatio ?ctRatio.
+	 ?inf c:TapChangerInfo.ptRatio ?ptRatio.
+	}
+	ORDER BY ?pname ?tname ?rname ?wnum ?bus
+	""" % model_mrid
+	reg_results = gapps.query_data(query, timeout=60)
+	
+	
+	# Get measurement MRIDS for regulators in the feeder
+        
+	message = {
+		"modelId": model_mrid,
+		"requestType": "QUERY_OBJECT_MEASUREMENTS",
+		"resultFormat": "JSON",
+		"objectType": "PowerTransformer"}     
+	obj_msr_reg = gapps.get_response(topic, message, timeout=180)
+        # get all of the data here
+	obj_msr_reg = obj_msr_reg['data']
+        
+	# print ("*********** regulator measurement message *************")
+	# print(obj_msr_reg)
+	
+	
+	
+	#print('################# regulator RESULTS ####################')
+	#print(reg_results)
+	#print(sh)
+		
 	# print('################# RESULTS ####################')
-	# print(results)
+	# print(sw_results)
+	# print(sh)
 	
 	# print('\n ********************************** \n')
-	results_obj = results['data']
-	sw_data = results_obj['results']['bindings']
-	# print('################# SW ####################')
-	# print(sw_data)
-	# print('\n ********************************** \n')
+	results_obj_sw = sw_results['data']
+	sw_data = results_obj_sw['results']['bindings']
+	
+	results_obj_reg = reg_results['data']
+	reg_data = results_obj_reg['results']['bindings']
+	
+	#print ("\n################### reg data ##########################\n")
+	#print (reg_data)
+	#print (sh)
+	
+	
 	
 	switches = []
 	for p in sw_data:
-		# print(p)
 		sw_mrid = p['id']['value']
 		fr_to = [p['bus1']['value'].upper(), p['bus2']['value'].upper()]
 		message = dict(name = p['name']['value'],
@@ -349,8 +501,23 @@ def get_meas_mrid(gapps, model_mrid, topic):
 				sw_con = fr_to)
 		switches.append(message)
 	
+	regulators = []
+	for p in reg_data:
+		#print(p)
+		reg_obj_id = p['fdrid']['value']
+		status = p['step']['value']
+		incr_value = p['incr']['value']
+		message = dict(name = p['rname']['value'],
+				mrid = reg_obj_id,
+				op_con = status,
+				increment = incr_value)
+		regulators.append(message)
+	
 	# print("\n **************** Swtiches data ********************** \n")
 	# print(switches)
+	
+	# print("\n **************** regulators data ********************** \n")
+	# print(regulators)
 
 	# want to check what's in there? why not print ???
 	# print(obj_msr_ACline)
@@ -360,7 +527,7 @@ def get_meas_mrid(gapps, model_mrid, topic):
 	# it will have different MRIDs such as voltage, current, power etc
 
 	# here ACLine already has a filter to show such MRID whose type is PNV 
-	return obj_msr_ACline, obj_msr_loadsw, switches
+	return obj_msr_ACline, obj_msr_loadsw, obj_msr_reg, switches, regulators
 
 
 def _main():
@@ -401,7 +568,7 @@ def _main():
     topic = "goss.gridappsd.process.request.data.powergridmodel"
 
     # returns the MRID for AC lines and switch
-    ACline, obj_msr_loadsw, switches = get_meas_mrid(gapps, model_mrid, topic)
+    ACline, obj_msr_loadsw, obj_msr_reg, switches, regulators = get_meas_mrid(gapps, model_mrid, topic)
     
     # print("\n ************ ACLine ********* \n")
     # print(ACline)
@@ -411,7 +578,7 @@ def _main():
     # print(sh)
     
     # toggling the switch ON and OFF
-    toggler = NodalVoltage(opts.simulation_id, gapps, ACline, obj_msr_loadsw, switches)
+    toggler = NodalVoltage(opts.simulation_id, gapps, ACline, obj_msr_loadsw, obj_msr_reg, switches, regulators)
 
     # gapps.subscribe calls the on_message function
     gapps.subscribe(listening_to_topic, toggler)
